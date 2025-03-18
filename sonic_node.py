@@ -5,19 +5,10 @@ import torch
 import gc
 import numpy as np
 from omegaconf import OmegaConf
-from diffusers import AutoencoderKLTemporalDecoder
-from diffusers.schedulers import EulerDiscreteScheduler
-from transformers import WhisperModel, AutoFeatureExtractor
+# from diffusers import AutoencoderKLTemporalDecoder
 import random
 import io
-import torchaudio
-from .src.models.base.unet_spatio_temporal_condition import UNetSpatioTemporalConditionModel
-from .sonic import Sonic, sonic_predata, preprocess_face, crop_face_image
-from .src.dataset.test_preprocess import image_audio_to_tensor
-from .src.models.audio_adapter.audio_proj import AudioProjModel
-from .src.models.audio_adapter.audio_to_bucket import Audio2bucketModel
-from .node_utils import tensor2cv, cv2pil,convert_cf2diffuser,tensor_upscale,tensor2pil
-from .src.dataset.face_align.align import AlignImage
+# from .src.models.base.unet_spatio_temporal_condition import UNetSpatioTemporalConditionModel
 
 import folder_paths
 
@@ -32,9 +23,11 @@ device = torch.device(
 
 # add checkpoints dir
 SONIC_weigths_path = os.path.join(folder_paths.models_dir, "sonic")
+cache_SONIC_weigths_path = os.path.join(folder_paths.cache_dir, "sonic")
 if not os.path.exists(SONIC_weigths_path):
     os.makedirs(SONIC_weigths_path)
 folder_paths.add_model_folder_path("sonic", SONIC_weigths_path)
+folder_paths.add_model_folder_path("sonic", cache_SONIC_weigths_path)
 
 
 class SONICLoader:
@@ -60,6 +53,10 @@ class SONICLoader:
 
     def loader_main(self, model, sonic_unet, ip_audio_scale, use_interframe, dtype):
 
+        from diffusers.schedulers import EulerDiscreteScheduler
+        from .sonic import Sonic
+        from .node_utils import convert_cf2diffuser
+
         if dtype == "fp16":
             weight_dtype = torch.float16
         elif dtype == "fp32":
@@ -70,6 +67,8 @@ class SONICLoader:
         svd_repo = os.path.join(current_node_path, "svd_repo")
         # check model is exits or not,if not auto downlaod
         flownet_ckpt = os.path.join(SONIC_weigths_path, "RIFE")
+        if not os.path.exists(flownet_ckpt) and os.path.exists(cache_SONIC_weigths_path):
+            flownet_ckpt = os.path.join(cache_SONIC_weigths_path, "RIFE")
 
         if sonic_unet != "none":
             sonic_unet = folder_paths.get_full_path("sonic", sonic_unet)
@@ -128,6 +127,14 @@ class SONIC_PreData:
     CATEGORY = "SONIC"
 
     def sampler_main(self, clip_vision,vae, audio, image,weight_dtype, min_resolution,duration, expand_ratio):
+        from transformers import WhisperModel, AutoFeatureExtractor
+        import torchaudio
+        from .sonic import sonic_predata, preprocess_face, crop_face_image
+        from .src.dataset.test_preprocess import image_audio_to_tensor
+        from .src.models.audio_adapter.audio_proj import AudioProjModel
+        from .src.models.audio_adapter.audio_to_bucket import Audio2bucketModel
+        from .node_utils import tensor2cv, cv2pil,tensor_upscale,tensor2pil
+        from .src.dataset.face_align.align import AlignImage
         
         config_file = os.path.join(current_node_path, 'config/inference/sonic.yaml')
         config = OmegaConf.load(config_file)
@@ -135,12 +142,18 @@ class SONIC_PreData:
         audio2token_ckpt = os.path.join(SONIC_weigths_path, "audio2token.pth")
         audio2bucket_ckpt = os.path.join(SONIC_weigths_path, "audio2bucket.pth")
         yolo_ckpt = os.path.join(SONIC_weigths_path, "yoloface_v5m.pt")
+        if not os.path.exists(audio2token_ckpt) or not os.path.exists(cache_SONIC_weigths_path):
+            audio2token_ckpt = os.path.join(cache_SONIC_weigths_path, "audio2token.pth")
+            audio2bucket_ckpt = os.path.join(cache_SONIC_weigths_path, "audio2bucket.pth")
+            yolo_ckpt = os.path.join(cache_SONIC_weigths_path, "yoloface_v5m.pt")
 
         if not os.path.exists(audio2bucket_ckpt) or not os.path.exists(audio2token_ckpt) or not os.path.exists(
                 yolo_ckpt):
             raise Exception("Please download the model first")
         # init model
         whisper_repo = os.path.join(SONIC_weigths_path, "whisper-tiny")
+        if not os.path.exists(whisper_repo) and os.path.exists(cache_SONIC_weigths_path):
+            whisper_repo = os.path.join(cache_SONIC_weigths_path, "whisper-tiny")
 
         whisper = WhisperModel.from_pretrained(whisper_repo).to(device).eval()
         whisper.requires_grad_(False)
